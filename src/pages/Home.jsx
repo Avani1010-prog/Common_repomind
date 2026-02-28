@@ -303,19 +303,7 @@ const Home = ({ showToast }) => {
                         <p style={{ color: 'var(--gray)', fontSize: '0.8rem' }}>AI-Powered Code Analysis & Intelligence.</p>
                     </div>
 
-                    {/* Links */}
-                    <div style={{ display: 'flex', gap: '2rem' }}>
-                        <a href="https://www.linkedin.com/in/avani-pandey-945651328/" target="_blank" rel="noopener noreferrer"
-                            style={{ color: 'var(--gray)', textDecoration: 'none', fontSize: '0.8rem', fontWeight: 600, transition: 'color 0.2s' }}
-                            onMouseEnter={e => e.target.style.color = 'var(--accent)'}
-                            onMouseLeave={e => e.target.style.color = 'var(--gray)'}
-                        >LinkedIn</a>
-                        <a href="https://github.com/Avani1010-prog" target="_blank" rel="noopener noreferrer"
-                            style={{ color: 'var(--gray)', textDecoration: 'none', fontSize: '0.8rem', fontWeight: 600, transition: 'color 0.2s' }}
-                            onMouseEnter={e => e.target.style.color = 'var(--accent)'}
-                            onMouseLeave={e => e.target.style.color = 'var(--gray)'}
-                        >GitHub</a>
-                    </div>
+
 
                     {/* Copyright */}
                     <div style={{ color: 'var(--border)', fontSize: '0.75rem', fontFamily: 'Space Mono, monospace' }}>
