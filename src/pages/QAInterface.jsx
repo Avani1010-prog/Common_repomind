@@ -1,66 +1,200 @@
-import { useState, useEffect } from 'react';
-import { useParams } from 'react-router-dom';
-import { motion } from 'framer-motion';
-import { Send, Tag, Sparkles, FileCode, MessageSquare } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { motion, AnimatePresence } from 'framer-motion';
+import {
+    Send, Tag, Sparkles, FileCode, ChevronDown, ChevronUp,
+    Bot, User, ArrowLeft, Hash, GitBranch
+} from 'lucide-react';
 import { askQuestion, getHistory, generateRefactor } from '../services/api';
 import CodeSnippet from '../components/CodeSnippet';
 import Mermaid from '../components/Mermaid';
-import Loader from '../components/Loader';
+
+/* ── tiny sub-components ─────────────────────────────────────────── */
+
+const TypingDots = () => (
+    <div style={{ display: 'flex', gap: '5px', alignItems: 'center', padding: '4px 0' }}>
+        {[0, 1, 2].map(i => (
+            <span key={i} style={{
+                width: '7px', height: '7px', borderRadius: '50%',
+                background: 'var(--accent)',
+                animation: `typingBounce 1.2s ${i * 0.2}s ease-in-out infinite`,
+                display: 'inline-block',
+            }} />
+        ))}
+        <style>{`
+            @keyframes typingBounce {
+                0%, 60%, 100% { transform: translateY(0); opacity: .6; }
+                30% { transform: translateY(-6px); opacity: 1; }
+            }
+        `}</style>
+    </div>
+);
+
+const FileRefCard = ({ fileRef: r, onRefactor, loadingRefactor }) => {
+    const [open, setOpen] = useState(false);
+    return (
+        <div style={{
+            border: '1px solid var(--accent-border)',
+            borderRadius: '8px',
+            overflow: 'hidden',
+            marginTop: '0.5rem',
+            background: 'var(--dark)',
+        }}>
+            <button
+                onClick={() => setOpen(o => !o)}
+                style={{
+                    width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: '0.6rem 0.9rem', background: 'var(--accent-soft)',
+                    border: 'none', cursor: 'pointer', gap: '0.75rem',
+                }}
+            >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
+                    <FileCode size={13} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+                    <span style={{ color: 'var(--accent)', fontFamily: 'Space Mono, monospace', fontSize: '0.72rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {r.file}
+                    </span>
+                    <span style={{ color: 'var(--gray)', fontSize: '0.65rem', fontFamily: 'Space Mono, monospace', flexShrink: 0 }}>
+                        L{r.lineStart}–{r.lineEnd}
+                    </span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
+                    <button
+                        onClick={e => { e.stopPropagation(); onRefactor(r.snippet, 'javascript'); }}
+                        disabled={loadingRefactor}
+                        style={{
+                            background: 'transparent', border: '1px solid var(--accent-border)',
+                            borderRadius: '4px', color: 'var(--accent)', cursor: 'pointer',
+                            fontSize: '0.62rem', fontWeight: 700, padding: '0.15rem 0.4rem',
+                            display: 'flex', alignItems: 'center', gap: '0.25rem',
+                            letterSpacing: '0.05em', textTransform: 'uppercase',
+                            opacity: loadingRefactor ? 0.5 : 1,
+                        }}
+                    >
+                        <Sparkles size={10} /> Refactor
+                    </button>
+                    {open ? <ChevronUp size={13} color="var(--gray)" /> : <ChevronDown size={13} color="var(--gray)" />}
+                </div>
+            </button>
+            <AnimatePresence>
+                {open && (
+                    <motion.div
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={{ duration: 0.2 }}
+                        style={{ overflow: 'hidden' }}
+                    >
+                        {r.explanation && (
+                            <p style={{ color: 'var(--gray)', fontSize: '0.78rem', padding: '0.6rem 0.9rem', borderBottom: '1px solid var(--accent-border)', lineHeight: 1.6, margin: 0 }}>
+                                {r.explanation}
+                            </p>
+                        )}
+                        <CodeSnippet code={r.snippet} language="javascript" />
+                    </motion.div>
+                )}
+            </AnimatePresence>
+        </div>
+    );
+};
+
+/* ── main component ──────────────────────────────────────────────── */
 
 const QAInterface = ({ showToast }) => {
     const { codebaseId } = useParams();
+    const navigate = useNavigate();
+
+    const [messages, setMessages] = useState([]); // {role:'user'|'ai', content, tags, fileRefs, mermaid, refactor, id}
     const [question, setQuestion] = useState('');
     const [tags, setTags] = useState('');
+    const [showTags, setShowTags] = useState(false);
     const [loading, setLoading] = useState(false);
-    const [currentAnswer, setCurrentAnswer] = useState(null);
-    const [history, setHistory] = useState([]);
-    const [refactorSuggestions, setRefactorSuggestions] = useState(null);
     const [loadingRefactor, setLoadingRefactor] = useState(false);
+    const [codebaseName, setCodebaseName] = useState('');
 
-    useEffect(() => { loadHistory(); }, [codebaseId]);
+    const bottomRef = useRef(null);
+    const inputRef = useRef(null);
 
-    const loadHistory = async () => {
-        try {
-            const response = await getHistory(codebaseId);
-            const questions = response?.questions;
-            setHistory(Array.isArray(questions) ? questions : []);
-        } catch (error) {
-            console.error('Failed to load history:', error);
-            setHistory([]);
-        }
-    };
+    /* load past history as initial messages */
+    useEffect(() => {
+        const loadHistory = async () => {
+            try {
+                const response = await getHistory(codebaseId);
+                const qs = Array.isArray(response?.questions) ? response.questions : [];
+                const msgs = [];
+                qs.slice().reverse().forEach((item, i) => {
+                    msgs.push({
+                        id: `h-user-${i}`,
+                        role: 'user',
+                        content: item.question,
+                        tags: item.tags || [],
+                    });
+                    msgs.push({
+                        id: `h-ai-${i}`,
+                        role: 'ai',
+                        content: item.answer,
+                        mermaid: item.mermaid_code,
+                        fileRefs: item.file_references || [],
+                        timestamp: item.created_at,
+                    });
+                });
+                setMessages(msgs);
+                if (qs[0]?.codebase_name) setCodebaseName(qs[0].codebase_name);
+            } catch { /* silent */ }
+        };
+        loadHistory();
+    }, [codebaseId]);
 
-    const handleAskQuestion = async (e) => {
-        e.preventDefault();
-        if (!question.trim()) { showToast('Enter a question', 'error'); return; }
+    /* auto-scroll */
+    useEffect(() => {
+        bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [messages, loading]);
+
+    const handleSend = async (e) => {
+        e?.preventDefault();
+        const q = question.trim();
+        if (!q) return;
+
+        const tagArray = tags.split(',').map(t => t.trim()).filter(Boolean);
+        const userMsgId = `u-${Date.now()}`;
+        const aiMsgId = `a-${Date.now()}`;
+
+        setMessages(prev => [...prev, { id: userMsgId, role: 'user', content: q, tags: tagArray }]);
+        setQuestion('');
+        setTags('');
+        setShowTags(false);
         setLoading(true);
-        setRefactorSuggestions(null);
+
         try {
-            const tagArray = tags.split(',').map(t => t.trim()).filter(t => t);
-            const response = await askQuestion(codebaseId, question, tagArray);
-            setCurrentAnswer({
-                question,
-                answer: response.answer,
-                mermaidCode: response.mermaidCode,
-                fileReferences: response.fileReferences,
-                tags: tagArray
-            });
-            setQuestion('');
-            setTags('');
-            loadHistory();
+            const response = await askQuestion(codebaseId, q, tagArray);
+            setMessages(prev => [...prev, {
+                id: aiMsgId,
+                role: 'ai',
+                content: response.answer,
+                mermaid: response.mermaidCode,
+                fileRefs: response.fileReferences || [],
+                timestamp: new Date().toISOString(),
+            }]);
             showToast('Answer ready!', 'success');
-        } catch (error) {
-            showToast(error.response?.data?.error || 'Failed to get answer', 'error');
+        } catch (err) {
+            setMessages(prev => [...prev, {
+                id: aiMsgId,
+                role: 'ai',
+                content: '⚠️ ' + (err.response?.data?.error || 'Failed to get an answer. Please try again.'),
+                fileRefs: [],
+                isError: true,
+            }]);
         } finally {
             setLoading(false);
         }
     };
 
-    const handleGenerateRefactor = async (code, language) => {
+    const handleRefactor = async (msgId, code, language) => {
         setLoadingRefactor(true);
         try {
             const response = await generateRefactor(code, language);
-            setRefactorSuggestions(response.suggestions);
+            setMessages(prev => prev.map(m =>
+                m.id === msgId ? { ...m, refactor: response.suggestions } : m
+            ));
             showToast('Refactor suggestions ready', 'success');
         } catch {
             showToast('Failed to generate suggestions', 'error');
@@ -69,255 +203,402 @@ const QAInterface = ({ showToast }) => {
         }
     };
 
-    const priorityColor = (p) => p === 'high' ? '#ff4444' : p === 'medium' ? '#ffcc00' : '#aaff00';
+    const handleKeyDown = (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            handleSend();
+        }
+    };
 
     return (
-        <div style={{ minHeight: '100vh' }}>
-            <div className="qa-layout">
+        <div className="qa-page-wrap" style={{
+            display: 'flex',
+            flexDirection: 'column',
+            height: '100vh',
+            background: 'var(--bg)',
+            overflow: 'hidden',
+        }}>
 
-                {/* ── MAIN AREA ── */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            {/* ── TOP BAR ── */}
+            <div className="qa-topbar" style={{
+                display: 'flex', alignItems: 'center', gap: '1rem',
+                padding: '0.85rem 1.5rem',
+                background: 'var(--glass-bg)',
+                backdropFilter: 'blur(20px)',
+                borderBottom: '1px solid var(--accent-border)',
+                flexShrink: 0,
+                zIndex: 10,
+            }}>
+                <button
+                    onClick={() => navigate('/')}
+                    style={{
+                        background: 'transparent', border: 'none', cursor: 'pointer',
+                        color: 'var(--gray)', display: 'flex', alignItems: 'center', gap: '0.4rem',
+                        fontSize: '0.8rem', fontWeight: 700, padding: '0.4rem 0.6rem',
+                        borderRadius: '6px', transition: 'all 0.15s',
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.color = 'var(--accent)'; e.currentTarget.style.background = 'var(--accent-soft)'; }}
+                    onMouseLeave={e => { e.currentTarget.style.color = 'var(--gray)'; e.currentTarget.style.background = 'transparent'; }}
+                >
+                    <ArrowLeft size={15} /> Home
+                </button>
 
-                    {/* Question Input */}
-                    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-                        className="glass-card"
-                        style={{ padding: '2rem' }}>
+                <div style={{ width: '1px', height: '20px', background: 'var(--border)' }} />
 
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.5rem' }}>
-                            <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#aaff00', boxShadow: '0 0 8px rgba(170,255,0,0.8)' }} />
-                            <span className="section-label">Ask a Question</span>
-                        </div>
-
-                        <form onSubmit={handleAskQuestion} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                            <textarea
-                                value={question}
-                                onChange={(e) => setQuestion(e.target.value)}
-                                placeholder="e.g. Where is authentication handled? How do retries work?"
-                                className="input-glass"
-                                style={{ height: '120px', resize: 'none' }}
-                                disabled={loading}
-                                onKeyDown={(e) => { if (e.ctrlKey && e.key === 'Enter') handleAskQuestion(e); }}
-                            />
-
-                            <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-                                <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                    <Tag size={14} style={{ color: '#666', flexShrink: 0 }} />
-                                    <input
-                                        type="text"
-                                        value={tags}
-                                        onChange={(e) => setTags(e.target.value)}
-                                        placeholder="Tags: auth, api, database"
-                                        className="input-glass"
-                                        disabled={loading}
-                                    />
-                                </div>
-                                <button type="submit" className="btn-primary" disabled={loading} style={{ flexShrink: 0 }}>
-                                    {loading
-                                        ? <>Analyzing...</>
-                                        : <><Send size={15} /> Ask</>
-                                    }
-                                </button>
-                            </div>
-
-                            <p style={{ color: '#444', fontSize: '0.72rem', fontFamily: 'Space Mono, monospace' }}>
-                                Ctrl+Enter to submit
-                            </p>
-                        </form>
-                    </motion.div>
-
-                    {/* Answer or Loader */}
-                    {(loading || currentAnswer) && (
-                        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-                            className="glass-card"
-                            style={{ padding: '2rem' }}>
-
-                            {loading ? (
-                                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '3rem 0' }}>
-                                    <Loader />
-                                    <p style={{ marginTop: '2rem', color: '#aaff00', fontSize: '0.9rem', fontWeight: 700, letterSpacing: '0.05em', animation: 'pulse 1.5s infinite' }}>
-                                        ANALYZING CODEBASE...
-                                    </p>
-                                </div>
-                            ) : (
-                                <>
-
-                                    {/* Question */}
-                                    <div style={{ marginBottom: '1.5rem', paddingBottom: '1.5rem', borderBottom: '1px solid rgba(170,255,0,0.1)' }}>
-                                        <div className="section-label" style={{ marginBottom: '0.75rem' }}>Question</div>
-                                        <p style={{ color: '#ccc', fontSize: '0.95rem', lineHeight: 1.6 }}>{currentAnswer.question}</p>
-                                        {currentAnswer.tags?.length > 0 && (
-                                            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem', flexWrap: 'wrap' }}>
-                                                {currentAnswer.tags.map((tag, i) => <span key={i} className="tag">{tag}</span>)}
-                                            </div>
-                                        )}
-                                    </div>
-
-                                    {/* Mermaid Diagram */}
-                                    {currentAnswer.mermaidCode && (
-                                        <div style={{ marginBottom: '1.5rem' }}>
-                                            <div className="section-label" style={{ marginBottom: '0.75rem' }}>Visual Overview</div>
-                                            <Mermaid chart={currentAnswer.mermaidCode} />
-                                        </div>
-                                    )}
-
-                                    {/* Answer */}
-                                    <div style={{ marginBottom: '1.5rem' }}>
-                                        <div className="section-label" style={{ marginBottom: '0.75rem' }}>Answer</div>
-                                        <p style={{ color: '#aaa', fontSize: '0.9rem', lineHeight: 1.8, whiteSpace: 'pre-wrap' }}>{currentAnswer.answer}</p>
-                                    </div>
-
-                                    {/* File References */}
-                                    {currentAnswer.fileReferences?.length > 0 && (
-                                        <div>
-                                            <div className="section-label" style={{ marginBottom: '1rem' }}>Code References ({currentAnswer.fileReferences.length})</div>
-                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                                                {currentAnswer.fileReferences.map((ref, i) => (
-                                                    <div key={i} className="glass-card" style={{ overflow: 'hidden' }}>
-                                                        {/* File header */}
-                                                        <div style={{
-                                                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                                                            padding: '0.75rem 1rem',
-                                                            borderBottom: '1px solid rgba(170,255,0,0.1)',
-                                                            background: 'rgba(170,255,0,0.04)',
-                                                        }}>
-                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                                                                <FileCode size={14} style={{ color: '#aaff00', filter: 'drop-shadow(0 0 4px rgba(170,255,0,0.6))' }} />
-                                                                <span style={{ color: '#aaff00', fontFamily: 'Space Mono, monospace', fontSize: '0.78rem', textShadow: '0 0 8px rgba(170,255,0,0.5)' }}>{ref.file}</span>
-                                                                <span style={{ color: '#555', fontSize: '0.72rem', fontFamily: 'Space Mono, monospace' }}>
-                                                                    L{ref.lineStart}–{ref.lineEnd}
-                                                                </span>
-                                                            </div>
-                                                            <button
-                                                                onClick={() => handleGenerateRefactor(ref.snippet, 'javascript')}
-                                                                disabled={loadingRefactor}
-                                                                className="btn-outline-lime"
-                                                                style={{ padding: '0.3rem 0.75rem', fontSize: '0.7rem' }}
-                                                            >
-                                                                <Sparkles size={12} /> Refactor
-                                                            </button>
-                                                        </div>
-                                                        {ref.explanation && (
-                                                            <p style={{ color: '#666', fontSize: '0.8rem', padding: '0.75rem 1rem', borderBottom: '1px solid rgba(170,255,0,0.08)' }}>
-                                                                {ref.explanation}
-                                                            </p>
-                                                        )}
-                                                        <CodeSnippet code={ref.snippet} language="javascript" />
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        </div>
-                                    )}
-                                </>
-                            )}
-                        </motion.div>
-                    )}
-
-                    {/* Refactor Suggestions */}
-                    {refactorSuggestions?.length > 0 && (
-                        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-                            className="glass-card"
-                            style={{ padding: '2rem', borderColor: 'rgba(170,255,0,0.4) !important' }}>
-                            <div className="section-label" style={{ marginBottom: '1.5rem' }}>Refactor Suggestions</div>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                                {refactorSuggestions.map((s, i) => (
-                                    <div key={i} className="glass-card" style={{ padding: '1.25rem' }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-                                            <span style={{ fontWeight: 700, color: '#fff', fontSize: '0.9rem' }}>{s.title}</span>
-                                            <div style={{ display: 'flex', gap: '0.5rem' }}>
-                                                <span style={{ background: priorityColor(s.priority), color: '#000', fontSize: '0.65rem', fontWeight: 700, padding: '0.15rem 0.5rem', borderRadius: '4px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                                                    {s.priority}
-                                                </span>
-                                                <span className="tag-outline">{s.category}</span>
-                                            </div>
-                                        </div>
-                                        <p style={{ color: '#777', fontSize: '0.82rem', lineHeight: 1.6 }}>{s.description}</p>
-                                    </div>
-                                ))}
-                            </div>
-                        </motion.div>
-                    )}
+                {/* Bot avatar */}
+                <div style={{
+                    width: '36px', height: '36px', borderRadius: '50%',
+                    background: 'var(--accent-soft)',
+                    border: '2px solid var(--accent)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    flexShrink: 0,
+                    position: 'relative',
+                }}>
+                    <Bot size={18} color="var(--accent)" />
+                    <span style={{
+                        position: 'absolute', bottom: '0', right: '0',
+                        width: '10px', height: '10px', borderRadius: '50%',
+                        background: '#00dd88', border: '2px solid var(--bg)',
+                    }} />
                 </div>
 
-                {/* ── SIDEBAR ── */}
-                <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}
-                    className="glass-card qa-sidebar"
-                    style={{ padding: '1.5rem', alignSelf: 'start', position: 'sticky', top: '80px' }}>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.25rem', paddingBottom: '1rem', borderBottom: '1px solid rgba(170,255,0,0.1)' }}>
-                        <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#aaff00', boxShadow: '0 0 6px rgba(170,255,0,0.8)' }} />
-                        <span className="section-label">Recent Questions</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 800, fontSize: '0.9rem', color: 'var(--white)', letterSpacing: '0.02em' }}>
+                        RepoMind AI
                     </div>
+                    <div style={{ color: 'var(--accent)', fontSize: '0.68rem', fontFamily: 'Space Mono, monospace', opacity: 0.85 }}>
+                        {codebaseName || `Session: ${codebaseId?.slice(-8)}`}
+                    </div>
+                </div>
 
-                    {history.length === 0 ? (
-                        <p style={{ color: '#444', fontSize: '0.8rem', textAlign: 'center', padding: '2rem 0' }}>No questions yet</p>
-                    ) : (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', maxHeight: '600px', overflowY: 'auto', paddingRight: '2px' }}>
-                            {history.map((item, i) => (
-                                <motion.div
-                                    key={i}
-                                    whileHover={{ y: -4 }}
-                                    transition={{ duration: 0.2 }}
-                                    onClick={() => setCurrentAnswer({
-                                        question: item.question,
-                                        answer: item.answer,
-                                        mermaidCode: item.mermaid_code,
-                                        fileReferences: item.file_references,
-                                        tags: item.tags
-                                    })}
-                                    className="glass-card"
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'var(--accent-soft)', border: '1px solid var(--accent-border)', borderRadius: '20px', padding: '0.3rem 0.75rem' }}>
+                    <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#00dd88', display: 'inline-block' }} />
+                    <span style={{ color: 'var(--accent)', fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.05em' }}>ONLINE</span>
+                </div>
+            </div>
+
+            {/* ── CHAT MESSAGES ── */}
+            <div className="qa-chat-area" style={{
+                flex: 1,
+                overflowY: 'auto',
+                padding: '1.5rem',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '1.25rem',
+            }}>
+
+                {/* Welcome message */}
+                {messages.length === 0 && !loading && (
+                    <motion.div
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '4rem 2rem', gap: '1rem', textAlign: 'center' }}
+                    >
+                        <div style={{
+                            width: '72px', height: '72px', borderRadius: '50%',
+                            background: 'var(--accent-soft)', border: '2px solid var(--accent)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            marginBottom: '0.5rem',
+                        }}>
+                            <Bot size={32} color="var(--accent)" />
+                        </div>
+                        <div style={{ fontWeight: 800, fontSize: '1.2rem', color: 'var(--white)' }}>Ask me anything about your codebase</div>
+                        <p style={{ color: 'var(--gray)', fontSize: '0.85rem', maxWidth: '380px', lineHeight: 1.7 }}>
+                            I can find functions, explain logic, trace data flows, identify bugs, and suggest refactors.
+                        </p>
+                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'center', marginTop: '0.5rem' }}>
+                            {[
+                                'Where is auth handled?',
+                                'How does the upload flow work?',
+                                'List all API endpoints',
+                                'What DB models exist?',
+                            ].map(q => (
+                                <button
+                                    key={q}
+                                    onClick={() => { setQuestion(q); inputRef.current?.focus(); }}
                                     style={{
-                                        padding: '1.1rem 1.1rem',
-                                        cursor: 'pointer',
-                                        width: '100%',
+                                        background: 'var(--dark)', border: '1px solid var(--border)',
+                                        borderRadius: '20px', color: 'var(--gray)',
+                                        padding: '0.4rem 0.9rem', cursor: 'pointer',
+                                        fontSize: '0.75rem', fontWeight: 600,
+                                        transition: 'all 0.15s',
                                     }}
+                                    onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.color = 'var(--accent)'; e.currentTarget.style.background = 'var(--accent-soft)'; }}
+                                    onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--gray)'; e.currentTarget.style.background = 'var(--dark)'; }}
                                 >
-                                    {/* Icon box */}
-                                    <div style={{
-                                        width: '32px', height: '32px',
-                                        background: 'rgba(170,255,0,0.1)',
-                                        border: '2px solid rgba(170,255,0,0.3)',
-                                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                        color: '#aaff00',
-                                        marginBottom: '0.75rem',
-                                        flexShrink: 0,
-                                    }}>
-                                        <MessageSquare size={15} />
-                                    </div>
-
-                                    {/* Question text */}
-                                    <div style={{
-                                        fontWeight: 800,
-                                        fontSize: '0.82rem',
-                                        color: '#fff',
-                                        marginBottom: '0.35rem',
-                                        letterSpacing: '0.01em',
-                                        overflow: 'hidden',
-                                        display: '-webkit-box',
-                                        WebkitLineClamp: 2,
-                                        WebkitBoxOrient: 'vertical',
-                                        lineHeight: 1.5,
-                                    }}>
-                                        {item.question}
-                                    </div>
-
-                                    {/* Date */}
-                                    <div style={{ color: '#555', fontSize: '0.68rem', fontFamily: 'Space Mono, monospace', marginBottom: item.tags?.length > 0 ? '0.5rem' : 0 }}>
-                                        {new Date(item.created_at).toLocaleDateString()}
-                                    </div>
-
-                                    {/* Tags */}
-                                    {item.tags?.length > 0 && (
-                                        <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
-                                            {item.tags.slice(0, 3).map((tag, ti) => (
-                                                <span key={ti} className="tag" style={{ fontSize: '0.6rem', padding: '0.1rem 0.4rem' }}>{tag}</span>
-                                            ))}
-                                        </div>
-                                    )}
-                                </motion.div>
+                                    {q}
+                                </button>
                             ))}
                         </div>
+                    </motion.div>
+                )}
+
+                {/* Message list */}
+                {messages.map((msg) => (
+                    <motion.div
+                        key={msg.id}
+                        initial={{ opacity: 0, y: 14 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.25 }}
+                        style={{
+                            display: 'flex',
+                            flexDirection: msg.role === 'user' ? 'row-reverse' : 'row',
+                            alignItems: 'flex-start',
+                            gap: '0.75rem',
+                            maxWidth: '100%',
+                        }}
+                    >
+                        {/* Avatar */}
+                        <div style={{
+                            width: '32px', height: '32px', borderRadius: '50%', flexShrink: 0,
+                            background: msg.role === 'user' ? 'var(--border)' : 'var(--accent-soft)',
+                            border: `2px solid ${msg.role === 'user' ? 'var(--border)' : 'var(--accent)'}`,
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        }}>
+                            {msg.role === 'user'
+                                ? <User size={15} color="var(--gray)" />
+                                : <Bot size={15} color="var(--accent)" />
+                            }
+                        </div>
+
+                        {/* Bubble + extras */}
+                        <div style={{ maxWidth: 'min(75%, 700px)', display: 'flex', flexDirection: 'column', gap: '0.5rem', alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
+
+                            {/* Bubble */}
+                            <div style={{
+                                background: msg.role === 'user'
+                                    ? 'var(--accent)'
+                                    : msg.isError ? 'rgba(255,68,68,0.08)' : 'var(--card)',
+                                color: msg.role === 'user' ? 'var(--bg)' : msg.isError ? '#ff6666' : 'var(--white)',
+                                border: msg.role === 'user' ? 'none' : `1px solid ${msg.isError ? 'rgba(255,68,68,0.3)' : 'var(--accent-border)'}`,
+                                borderRadius: msg.role === 'user' ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
+                                padding: '0.85rem 1.1rem',
+                                fontSize: '0.88rem',
+                                lineHeight: 1.75,
+                                whiteSpace: 'pre-wrap',
+                                wordBreak: 'break-word',
+                                boxShadow: msg.role === 'user' ? '0 4px 12px var(--accent-glow)' : '0 2px 8px rgba(0,0,0,0.3)',
+                            }}>
+                                {msg.content}
+                            </div>
+
+                            {/* Tags (user) */}
+                            {msg.role === 'user' && msg.tags?.length > 0 && (
+                                <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                                    {msg.tags.map((t, ti) => (
+                                        <span key={ti} style={{
+                                            background: 'var(--accent-soft)', border: '1px solid var(--accent-border)',
+                                            borderRadius: '20px', color: 'var(--accent)',
+                                            fontSize: '0.62rem', padding: '0.1rem 0.45rem',
+                                            fontFamily: 'Space Mono, monospace', display: 'flex', alignItems: 'center', gap: '0.2rem',
+                                        }}>
+                                            <Hash size={9} /> {t}
+                                        </span>
+                                    ))}
+                                </div>
+                            )}
+
+                            {/* Mermaid diagram */}
+                            {msg.role === 'ai' && msg.mermaid && (
+                                <div style={{ width: '100%' }}>
+                                    <div style={{ color: 'var(--gray)', fontSize: '0.68rem', fontFamily: 'Space Mono, monospace', marginBottom: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                        <GitBranch size={11} /> Visual Overview
+                                    </div>
+                                    <Mermaid chart={msg.mermaid} />
+                                </div>
+                            )}
+
+                            {/* File references */}
+                            {msg.role === 'ai' && msg.fileRefs?.length > 0 && (
+                                <div style={{ width: '100%' }}>
+                                    <div style={{ color: 'var(--gray)', fontSize: '0.68rem', fontFamily: 'Space Mono, monospace', marginBottom: '0.35rem' }}>
+                                        {msg.fileRefs.length} file reference{msg.fileRefs.length > 1 ? 's' : ''}
+                                    </div>
+                                    {msg.fileRefs.map((ref, ri) => (
+                                        <FileRefCard
+                                            key={ri}
+                                            fileRef={ref}
+                                            onRefactor={(code, lang) => handleRefactor(msg.id, code, lang)}
+                                            loadingRefactor={loadingRefactor}
+                                        />
+                                    ))}
+                                </div>
+                            )}
+
+                            {/* Refactor panel */}
+                            {msg.role === 'ai' && msg.refactor?.length > 0 && (
+                                <div style={{
+                                    background: 'var(--dark)', border: '1px solid var(--accent-border)',
+                                    borderRadius: '12px', padding: '1rem', width: '100%',
+                                }}>
+                                    <div style={{ color: 'var(--accent)', fontSize: '0.72rem', fontWeight: 700, marginBottom: '0.75rem', letterSpacing: '0.1em', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                        <Sparkles size={12} /> Refactor Suggestions
+                                    </div>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                                        {msg.refactor.map((s, si) => (
+                                            <div key={si} style={{ borderLeft: '3px solid var(--accent)', paddingLeft: '0.75rem' }}>
+                                                <div style={{ fontWeight: 700, fontSize: '0.82rem', color: 'var(--white)', marginBottom: '0.2rem' }}>{s.title}</div>
+                                                <p style={{ color: 'var(--gray)', fontSize: '0.77rem', lineHeight: 1.6, margin: 0 }}>{s.description}</p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Timestamp */}
+                            {msg.timestamp && (
+                                <div style={{ color: 'var(--border)', fontSize: '0.62rem', fontFamily: 'Space Mono, monospace' }}>
+                                    {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                </div>
+                            )}
+                        </div>
+                    </motion.div>
+                ))}
+
+                {/* Typing indicator */}
+                {loading && (
+                    <motion.div
+                        initial={{ opacity: 0, y: 14 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}
+                    >
+                        <div style={{
+                            width: '32px', height: '32px', borderRadius: '50%', flexShrink: 0,
+                            background: 'var(--accent-soft)', border: '2px solid var(--accent)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        }}>
+                            <Bot size={15} color="var(--accent)" />
+                        </div>
+                        <div style={{
+                            background: 'var(--card)', border: '1px solid var(--accent-border)',
+                            borderRadius: '18px 18px 18px 4px',
+                            padding: '0.85rem 1.1rem',
+                        }}>
+                            <TypingDots />
+                        </div>
+                    </motion.div>
+                )}
+
+                <div ref={bottomRef} />
+            </div>
+
+            {/* ── INPUT AREA ── */}
+            <div className="qa-input-area" style={{
+                flexShrink: 0,
+                padding: '1rem 1.5rem 1.25rem',
+                background: 'var(--glass-bg)',
+                backdropFilter: 'blur(20px)',
+                borderTop: '1px solid var(--accent-border)',
+            }}>
+
+                {/* Tags row (expandable) */}
+                <AnimatePresence>
+                    {showTags && (
+                        <motion.div
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: 'auto', opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            style={{ overflow: 'hidden', marginBottom: '0.5rem' }}
+                        >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', paddingBottom: '0.5rem' }}>
+                                <Tag size={13} color="var(--gray)" />
+                                <input
+                                    type="text"
+                                    value={tags}
+                                    onChange={e => setTags(e.target.value)}
+                                    placeholder="Tags (comma-separated): auth, api, database"
+                                    style={{
+                                        flex: 1, background: 'var(--dark)', border: '1px solid var(--border)',
+                                        borderRadius: '8px', color: 'var(--white)', padding: '0.45rem 0.75rem',
+                                        fontSize: '0.8rem', outline: 'none', fontFamily: 'Space Grotesk, sans-serif',
+                                    }}
+                                    onFocus={e => e.target.style.borderColor = 'var(--accent)'}
+                                    onBlur={e => e.target.style.borderColor = 'var(--border)'}
+                                />
+                            </div>
+                        </motion.div>
                     )}
-                </motion.div>
+                </AnimatePresence>
+
+                {/* Main input row */}
+                <form onSubmit={handleSend} style={{ display: 'flex', gap: '0.6rem', alignItems: 'flex-end' }}>
+
+                    {/* Tags toggle */}
+                    <button
+                        type="button"
+                        onClick={() => setShowTags(v => !v)}
+                        title="Add tags"
+                        style={{
+                            background: showTags ? 'var(--accent-soft)' : 'transparent',
+                            border: `1px solid ${showTags ? 'var(--accent)' : 'var(--border)'}`,
+                            borderRadius: '10px',
+                            color: showTags ? 'var(--accent)' : 'var(--gray)',
+                            cursor: 'pointer',
+                            padding: '0.65rem',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            flexShrink: 0,
+                            transition: 'all 0.15s',
+                            height: '44px', width: '44px',
+                        }}
+                    >
+                        <Tag size={15} />
+                    </button>
+
+                    {/* Text input */}
+                    <textarea
+                        ref={inputRef}
+                        value={question}
+                        onChange={e => { setQuestion(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px'; }}
+                        onKeyDown={handleKeyDown}
+                        placeholder="Ask anything about your codebase…   (Enter to send, Shift+Enter for newline)"
+                        disabled={loading}
+                        rows={1}
+                        style={{
+                            flex: 1,
+                            background: 'var(--dark)',
+                            border: '1.5px solid var(--border)',
+                            borderRadius: '12px',
+                            color: 'var(--white)',
+                            padding: '0.65rem 1rem',
+                            fontSize: '0.9rem',
+                            resize: 'none',
+                            outline: 'none',
+                            fontFamily: 'Space Grotesk, sans-serif',
+                            lineHeight: 1.5,
+                            overflowY: 'hidden',
+                            minHeight: '44px',
+                            maxHeight: '120px',
+                            transition: 'border-color 0.2s',
+                        }}
+                        onFocus={e => e.target.style.borderColor = 'var(--accent)'}
+                        onBlur={e => e.target.style.borderColor = 'var(--border)'}
+                    />
+
+                    {/* Send button */}
+                    <button
+                        type="submit"
+                        disabled={loading || !question.trim()}
+                        style={{
+                            background: loading || !question.trim() ? 'var(--border)' : 'var(--accent)',
+                            border: 'none',
+                            borderRadius: '12px',
+                            color: loading || !question.trim() ? 'var(--gray)' : 'var(--bg)',
+                            cursor: loading || !question.trim() ? 'not-allowed' : 'pointer',
+                            padding: '0.65rem',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            flexShrink: 0,
+                            transition: 'all 0.2s',
+                            height: '44px', width: '44px',
+                            boxShadow: !loading && question.trim() ? '0 4px 12px var(--accent-glow)' : 'none',
+                        }}
+                    >
+                        <Send size={17} />
+                    </button>
+                </form>
+
+                <p className="qa-hint-text" style={{ color: 'var(--border)', fontSize: '0.62rem', fontFamily: 'Space Mono, monospace', textAlign: 'center', marginTop: '0.5rem' }}>
+                    Enter ↵ send · Shift+Enter newline
+                </p>
             </div>
         </div>
     );

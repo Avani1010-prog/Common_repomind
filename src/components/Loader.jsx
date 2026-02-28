@@ -6,13 +6,13 @@ const Loader = () => {
             <div style={{
                 width: '7rem',
                 height: '7rem',
-                border: '8px solid #2a2a2a',
-                borderTopColor: '#aaff00',
+                border: '8px solid var(--border)',
+                borderTopColor: 'var(--accent)',
                 borderRadius: '9999px',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                color: '#aaff00',
+                color: 'var(--accent)',
                 fontSize: '2.25rem',
                 animation: 'spin 1s linear infinite'
             }}>

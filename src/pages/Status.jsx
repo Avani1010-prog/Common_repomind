@@ -5,12 +5,12 @@ import { getHealth } from '../services/api';
 const StatusRow = ({ label, value, ok }) => (
     <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '0.85rem 0', borderBottom: '1px solid rgba(170,255,0,0.08)'
+        padding: '0.85rem 0', borderBottom: '1px solid var(--accent-border)'
     }}>
-        <span style={{ color: '#888', fontSize: '0.85rem', fontWeight: 600 }}>{label}</span>
+        <span style={{ color: 'var(--gray)', fontSize: '0.85rem', fontWeight: 600 }}>{label}</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-            <span style={{ color: ok ? '#aaff00' : '#ff4444', fontFamily: 'Space Mono, monospace', fontSize: '0.8rem' }}>{value}</span>
-            <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: ok ? '#aaff00' : '#ff4444' }} />
+            <span style={{ color: ok ? 'var(--accent)' : '#ff4444', fontFamily: 'Space Mono, monospace', fontSize: '0.8rem' }}>{value}</span>
+            <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: ok ? 'var(--accent)' : '#ff4444' }} />
         </div>
     </div>
 );
@@ -44,17 +44,17 @@ const Status = () => {
                 {/* Header */}
                 <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} style={{ marginBottom: '2.5rem' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
-                        <div style={{ width: '40px', height: '2px', background: '#aaff00' }} />
+                        <div style={{ width: '40px', height: '2px', background: 'var(--accent)' }} />
                         <span className="section-label">System Status</span>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <h1 style={{ fontSize: '2rem', fontWeight: 800, color: '#fff' }}>Health Monitor</h1>
+                        <h1 style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--white)' }}>Health Monitor</h1>
                         <button onClick={fetchHealth} className="btn-outline-lime" disabled={loading}>
                             {loading ? 'Checking...' : 'Refresh'}
                         </button>
                     </div>
                     {lastChecked && (
-                        <p style={{ color: '#444', fontSize: '0.75rem', fontFamily: 'Space Mono, monospace', marginTop: '0.5rem' }}>
+                        <p style={{ color: 'var(--gray)', fontSize: '0.75rem', fontFamily: 'Space Mono, monospace', marginTop: '0.5rem' }}>
                             Last checked: {lastChecked.toLocaleTimeString()}
                         </p>
                     )}
@@ -71,8 +71,8 @@ const Status = () => {
                         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
                             className="glass-card"
                             style={{
-                                background: isOk ? 'rgba(170,255,0,0.07) !important' : 'rgba(255,68,68,0.07) !important',
-                                border: `1.5px solid ${isOk ? 'rgba(170,255,0,0.4)' : 'rgba(255,68,68,0.5)'} !important`,
+                                background: isOk ? 'var(--accent-soft) !important' : 'rgba(255,68,68,0.07) !important',
+                                border: `1.5px solid ${isOk ? 'var(--accent)' : 'rgba(255,68,68,0.5)'} !important`,
                                 padding: '1.5rem 2rem',
                                 display: 'flex',
                                 alignItems: 'center',
@@ -80,15 +80,15 @@ const Status = () => {
                             }}>
                             <div style={{
                                 width: '14px', height: '14px', borderRadius: '50%',
-                                background: isOk ? '#aaff00' : '#ff4444',
-                                boxShadow: `0 0 12px ${isOk ? '#aaff00' : '#ff4444'}`,
+                                background: isOk ? 'var(--accent)' : '#ff4444',
+                                boxShadow: isOk ? '0 0 12px var(--accent-glow)' : '0 0 12px #ff4444',
                                 flexShrink: 0,
                             }} />
                             <div>
-                                <div className={isOk ? 'lime-glow' : ''} style={{ fontWeight: 800, fontSize: '1rem', color: isOk ? '#aaff00' : '#ff4444', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                                <div className={isOk ? 'lime-glow' : ''} style={{ fontWeight: 800, fontSize: '1rem', color: isOk ? 'var(--accent)' : '#ff4444', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                                     {isOk ? 'All Systems Operational' : 'System Degraded'}
                                 </div>
-                                {health?.error && <div style={{ color: '#888', fontSize: '0.8rem', marginTop: '0.25rem' }}>{health.error}</div>}
+                                {health?.error && <div style={{ color: 'var(--gray)', fontSize: '0.8rem', marginTop: '0.25rem' }}>{health.error}</div>}
                             </div>
                         </motion.div>
 
@@ -130,8 +130,8 @@ const Status = () => {
                                         { label: 'Questions', value: health.stats.questions ?? '—' },
                                     ].map((stat, i) => (
                                         <div key={i} className="glass-card" style={{ padding: '1.25rem', textAlign: 'center' }}>
-                                            <div style={{ fontSize: '2rem', fontWeight: 900, color: '#aaff00', fontFamily: 'Space Mono, monospace' }}>{stat.value}</div>
-                                            <div style={{ color: '#666', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', marginTop: '0.25rem' }}>{stat.label}</div>
+                                            <div style={{ fontSize: '2rem', fontWeight: 900, color: 'var(--accent)', fontFamily: 'Space Mono, monospace' }}>{stat.value}</div>
+                                            <div style={{ color: 'var(--gray)', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', marginTop: '0.25rem' }}>{stat.label}</div>
                                         </div>
                                     ))}
                                 </div>

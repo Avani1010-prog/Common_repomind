@@ -1,21 +1,106 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Folder, MessageSquare, Clock, ChevronRight, Search, Github, FileArchive } from 'lucide-react';
+import {
+    MessageSquare, Bot, User, Clock, Folder, Github,
+    FileArchive, ChevronRight, Search, ArrowRight,
+    Hash, Layers, Plus
+} from 'lucide-react';
 import { getAllCodebases, getHistory } from '../services/api';
 
+/* ─── Source tag ────────────────────────────────────────────────── */
+const SourceBadge = ({ source }) => {
+    const icon = source === 'github' || source === 'github-split'
+        ? <Github size={10} />
+        : source === 'zip' ? <FileArchive size={10} /> : <Layers size={10} />;
+    return (
+        <span style={{
+            background: 'var(--accent-soft)', border: '1px solid var(--accent-border)',
+            borderRadius: '20px', color: 'var(--accent)',
+            fontSize: '0.6rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
+            padding: '0.1rem 0.45rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem',
+        }}>
+            {icon} {source || 'zip'}
+        </span>
+    );
+};
+
+/* ─── Chat message bubble (in the expanded panel) ───────────────── */
+const ChatBubble = ({ msg, isUser }) => (
+    <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        style={{
+            display: 'flex',
+            flexDirection: isUser ? 'row-reverse' : 'row',
+            alignItems: 'flex-start',
+            gap: '0.6rem',
+        }}
+    >
+        {/* avatar */}
+        <div style={{
+            width: '28px', height: '28px', borderRadius: '50%', flexShrink: 0,
+            background: isUser ? 'var(--border)' : 'var(--accent-soft)',
+            border: `2px solid ${isUser ? 'var(--border)' : 'var(--accent)'}`,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+            {isUser ? <User size={13} color="var(--gray)" /> : <Bot size={13} color="var(--accent)" />}
+        </div>
+
+        <div style={{ maxWidth: '75%', display: 'flex', flexDirection: 'column', gap: '0.3rem', alignItems: isUser ? 'flex-end' : 'flex-start' }}>
+            {/* bubble */}
+            <div style={{
+                background: isUser ? 'var(--accent)' : 'var(--dark)',
+                color: isUser ? 'var(--bg)' : 'var(--white)',
+                border: isUser ? 'none' : '1px solid var(--accent-border)',
+                borderRadius: isUser ? '14px 14px 4px 14px' : '14px 14px 14px 4px',
+                padding: '0.6rem 0.9rem',
+                fontSize: '0.82rem',
+                lineHeight: 1.65,
+                wordBreak: 'break-word',
+                whiteSpace: 'pre-wrap',
+                boxShadow: isUser ? '0 2px 8px var(--accent-glow)' : 'none',
+            }}>
+                {msg.text}
+            </div>
+
+            {/* tags */}
+            {isUser && msg.tags?.length > 0 && (
+                <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                    {msg.tags.map((t, i) => (
+                        <span key={i} style={{
+                            background: 'var(--accent-soft)', border: '1px solid var(--accent-border)',
+                            borderRadius: '20px', color: 'var(--accent)',
+                            fontSize: '0.58rem', padding: '0.1rem 0.4rem',
+                            fontFamily: 'Space Mono, monospace', display: 'flex', alignItems: 'center', gap: '0.2rem',
+                        }}>
+                            <Hash size={8} /> {t}
+                        </span>
+                    ))}
+                </div>
+            )}
+
+            {/* timestamp */}
+            {msg.time && (
+                <div style={{ color: 'var(--border)', fontSize: '0.58rem', fontFamily: 'Space Mono, monospace' }}>
+                    {msg.time}
+                </div>
+            )}
+        </div>
+    </motion.div>
+);
+
+/* ─── Main ───────────────────────────────────────────────────────── */
 const History = ({ showToast }) => {
     const navigate = useNavigate();
     const [codebases, setCodebases] = useState([]);
     const [loading, setLoading] = useState(true);
-    const [selectedCodebase, setSelectedCodebase] = useState(null);
-    const [questions, setQuestions] = useState([]);
-    const [questionsLoading, setQuestionsLoading] = useState(false);
+    const [selectedId, setSelectedId] = useState(null);
+    const [chatMap, setChatMap] = useState({}); // { codebaseId: [{role, text, tags, time}] }
+    const [chatLoading, setChatLoading] = useState(false);
     const [search, setSearch] = useState('');
 
-    useEffect(() => {
-        fetchCodebases();
-    }, []);
+    useEffect(() => { fetchCodebases(); }, []);
 
     const fetchCodebases = async () => {
         setLoading(true);
@@ -23,234 +108,265 @@ const History = ({ showToast }) => {
             const data = await getAllCodebases();
             setCodebases(data?.codebases || []);
         } catch {
-            showToast?.('Failed to load codebases', 'error');
-            setCodebases([]);
+            showToast?.('Failed to load sessions', 'error');
         } finally {
             setLoading(false);
         }
     };
 
-    const fetchQuestions = async (codebase) => {
-        setSelectedCodebase(codebase);
-        setQuestionsLoading(true);
-        setQuestions([]);
+    const loadChat = async (cb) => {
+        if (selectedId === cb._id) { setSelectedId(null); return; }
+        setSelectedId(cb._id);
+        if (chatMap[cb._id]) return; // already loaded
+
+        setChatLoading(true);
         try {
-            const data = await getHistory(codebase._id);
-            setQuestions(data?.questions || []);
+            const data = await getHistory(cb._id);
+            const qs = data?.questions || [];
+            const msgs = [];
+            qs.slice().reverse().forEach(item => {
+                msgs.push({ role: 'user', text: item.question, tags: item.tags, time: item.created_at ? new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null });
+                msgs.push({ role: 'ai', text: item.answer, time: item.created_at ? new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null });
+            });
+            setChatMap(prev => ({ ...prev, [cb._id]: msgs }));
         } catch {
-            showToast?.('Failed to load questions', 'error');
+            showToast?.('Failed to load chat', 'error');
         } finally {
-            setQuestionsLoading(false);
+            setChatLoading(false);
         }
     };
 
-    const filteredCodebases = codebases.filter(cb =>
-        cb.name?.toLowerCase().includes(search.toLowerCase())
-    );
+    const filtered = codebases.filter(cb => cb.name?.toLowerCase().includes(search.toLowerCase()));
+    const selectedCb = codebases.find(cb => cb._id === selectedId);
 
     return (
-        <div style={{ minHeight: '100vh', padding: '3rem 1.5rem' }}>
-            <div style={{ maxWidth: '1100px', margin: '0 auto' }}>
+        <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
 
-                {/* ── Header ── */}
-                <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} style={{ marginBottom: '2.5rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
-                        <div style={{ width: '40px', height: '2px', background: '#aaff00' }} />
-                        <span className="section-label">Codebase History</span>
-                        <div style={{ width: '40px', height: '2px', background: '#aaff00' }} />
+            {/* ── PAGE HEADER ── */}
+            <div className="history-header" style={{ padding: '2.5rem 2rem 0', borderBottom: '2px solid var(--border)' }}>
+                <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem' }}>
+                        <div style={{ width: '32px', height: '2px', background: 'var(--accent)' }} />
+                        <span className="section-label">Chat History</span>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem' }}>
-                        <h1 style={{ fontSize: '2rem', fontWeight: 800, color: '#fff' }}>All Sessions</h1>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: '#111', border: '2px solid #2a2a2a', padding: '0.5rem 1rem', minWidth: '240px' }}>
-                            <Search size={14} style={{ color: '#555', flexShrink: 0 }} />
-                            <input
-                                type="text"
-                                value={search}
-                                onChange={e => setSearch(e.target.value)}
-                                placeholder="Search codebases..."
-                                style={{ background: 'none', border: 'none', outline: 'none', color: '#fff', fontSize: '0.85rem', width: '100%', fontFamily: 'Space Grotesk, sans-serif' }}
-                            />
+                    <div className="history-header-row" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem', paddingBottom: '1.5rem' }}>
+                        <h1 style={{ fontSize: '1.8rem', fontWeight: 800, color: 'var(--white)' }}>All Sessions</h1>
+                        <div className="history-actions" style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                            {/* Search */}
+                            <div className="history-search-bar" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'var(--dark)', border: '1.5px solid var(--border)', padding: '0.45rem 0.9rem', borderRadius: '8px', minWidth: '220px' }}>
+                                <Search size={13} style={{ color: 'var(--gray)', flexShrink: 0 }} />
+                                <input
+                                    type="text"
+                                    value={search}
+                                    onChange={e => setSearch(e.target.value)}
+                                    placeholder="Search sessions..."
+                                    style={{ background: 'none', border: 'none', outline: 'none', color: 'var(--white)', fontSize: '0.82rem', width: '100%', fontFamily: 'Space Grotesk, sans-serif' }}
+                                />
+                            </div>
+                            {/* New session */}
+                            <button
+                                className="btn-primary"
+                                onClick={() => navigate('/')}
+                                style={{ padding: '0.5rem 1.1rem', fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+                            >
+                                <Plus size={14} /> New Session
+                            </button>
                         </div>
                     </div>
-                </motion.div>
+                </div>
+            </div>
 
-                {loading ? (
-                    <div style={{ display: 'flex', justifyContent: 'center', padding: '5rem' }}>
-                        <div className="spinner" />
-                    </div>
-                ) : filteredCodebases.length === 0 ? (
-                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-                        className="glass-card"
-                        style={{ padding: '4rem', textAlign: 'center' }}>
-                        <Folder size={48} style={{ color: '#2a2a2a', margin: '0 auto 1.5rem' }} />
-                        <div style={{ fontWeight: 800, color: '#444', fontSize: '1rem', marginBottom: '0.5rem' }}>No Codebases Yet</div>
-                        <p style={{ color: '#333', fontSize: '0.85rem', marginBottom: '2rem' }}>Upload a ZIP or connect a GitHub repo to get started.</p>
-                        <button className="btn-primary" onClick={() => navigate('/')}>
-                            Go to Home →
-                        </button>
-                    </motion.div>
-                ) : (
-                    <div style={{ display: 'grid', gridTemplateColumns: selectedCodebase ? '1fr 1.4fr' : '1fr', gap: '1.25rem' }}>
+            {/* ── BODY ── */}
+            <div className={`history-body${selectedId ? '' : ' no-selection'}`}>
 
-                        {/* ── Codebase Cards ── */}
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
-                            {filteredCodebases.map((cb, i) => {
-                                const isSelected = selectedCodebase?._id === cb._id;
-                                return (
-                                    <motion.div
-                                        key={cb._id}
-                                        initial={{ opacity: 0, y: 20 }}
-                                        animate={{ opacity: 1, y: 0 }}
-                                        transition={{ delay: i * 0.07 }}
-                                        whileHover={{ y: -4 }}
-                                        onClick={() => fetchQuestions(cb)}
-                                        className="glass-card"
-                                        style={{
-                                            padding: '1.75rem 1.5rem',
-                                            cursor: 'pointer',
-                                            border: isSelected ? '1.5px solid rgba(170,255,0,0.6) !important' : undefined,
-                                            boxShadow: isSelected ? '0 0 24px rgba(170,255,0,0.12)' : undefined,
-                                        }}
-                                    >
-                                        {/* Icon box */}
-                                        <div style={{
-                                            width: '40px', height: '40px',
-                                            background: 'rgba(170,255,0,0.1)',
-                                            border: '2px solid rgba(170,255,0,0.3)',
-                                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                            color: '#aaff00',
-                                            marginBottom: '1rem',
-                                        }}>
-                                            {cb.source === 'github'
-                                                ? <Github size={18} />
-                                                : <FileArchive size={18} />
-                                            }
-                                        </div>
-
-                                        {/* Name */}
-                                        <div style={{ fontWeight: 800, fontSize: '0.95rem', color: '#fff', marginBottom: '0.4rem', letterSpacing: '0.02em' }}>
-                                            {cb.name}
-                                        </div>
-
-                                        {/* Meta row */}
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: '#555', fontSize: '0.75rem', fontFamily: 'Space Mono, monospace' }}>
-                                                <Folder size={12} />
-                                                {cb.file_count ?? '—'} files
-                                            </div>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: '#555', fontSize: '0.75rem', fontFamily: 'Space Mono, monospace' }}>
-                                                <Clock size={12} />
-                                                {cb.created_at ? new Date(cb.created_at).toLocaleDateString() : '—'}
-                                            </div>
-                                            <span style={{
-                                                background: cb.source === 'github' ? 'rgba(170,255,0,0.12)' : 'rgba(100,100,255,0.12)',
-                                                color: cb.source === 'github' ? '#aaff00' : '#8888ff',
-                                                fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.1em',
-                                                textTransform: 'uppercase', padding: '0.15rem 0.5rem',
-                                                border: `1px solid ${cb.source === 'github' ? 'rgba(170,255,0,0.25)' : 'rgba(100,100,255,0.25)'}`,
-                                            }}>
-                                                {cb.source}
-                                            </span>
-                                        </div>
-
-                                        {/* CTA row */}
-                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid rgba(170,255,0,0.08)' }}>
-                                            <button
-                                                className="btn-primary"
-                                                style={{ fontSize: '0.72rem', padding: '0.45rem 1rem', letterSpacing: '0.1em' }}
-                                                onClick={e => { e.stopPropagation(); navigate(`/qa/${cb._id}`); }}
-                                            >
-                                                Open Q&A →
-                                            </button>
-                                            <ChevronRight size={16} style={{ color: isSelected ? '#aaff00' : '#333', transition: 'color 0.2s' }} />
-                                        </div>
-                                    </motion.div>
-                                );
-                            })}
+                {/* ── SESSION LIST ── */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                    {loading ? (
+                        <div style={{ display: 'flex', justifyContent: 'center', padding: '4rem' }}>
+                            <div className="spinner" />
                         </div>
+                    ) : filtered.length === 0 ? (
+                        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+                            className="glass-card"
+                            style={{ padding: '3rem', textAlign: 'center' }}
+                        >
+                            <Folder size={40} style={{ color: 'var(--border)', margin: '0 auto 1rem' }} />
+                            <div style={{ color: 'var(--gray)', fontWeight: 700 }}>No sessions yet</div>
+                            <p style={{ color: 'var(--border)', fontSize: '0.82rem', margin: '0.5rem 0 1.5rem' }}>Upload a codebase to start chatting.</p>
+                            <button className="btn-primary" onClick={() => navigate('/')}>Get Started →</button>
+                        </motion.div>
+                    ) : (
+                        filtered.map((cb, i) => {
+                            const isSelected = selectedId === cb._id;
+                            const msgs = chatMap[cb._id] || [];
+                            const lastUserMsg = msgs.filter(m => m.role === 'user').slice(-1)[0];
+                            const msgCount = msgs.filter(m => m.role === 'user').length;
 
-                        {/* ── Questions Panel ── */}
-                        <AnimatePresence>
-                            {selectedCodebase && (
+                            return (
                                 <motion.div
-                                    initial={{ opacity: 0, x: 20 }}
+                                    key={cb._id}
+                                    initial={{ opacity: 0, x: -16 }}
                                     animate={{ opacity: 1, x: 0 }}
-                                    exit={{ opacity: 0, x: 20 }}
-                                    className="glass-card"
-                                    style={{ padding: '2rem', alignSelf: 'start', position: 'sticky', top: '80px' }}
+                                    transition={{ delay: i * 0.05 }}
+                                    whileHover={{ x: 3 }}
+                                    onClick={() => loadChat(cb)}
+                                    style={{
+                                        cursor: 'pointer',
+                                        padding: '1rem 1.1rem',
+                                        borderRadius: '12px',
+                                        border: `1.5px solid ${isSelected ? 'var(--accent)' : 'var(--accent-border)'}`,
+                                        background: isSelected ? 'var(--accent-soft)' : 'var(--card)',
+                                        display: 'flex', gap: '0.85rem', alignItems: 'center',
+                                        transition: 'all 0.18s',
+                                        boxShadow: isSelected ? '0 0 18px var(--accent-glow)' : 'none',
+                                    }}
                                 >
-                                    {/* Panel header */}
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.5rem', paddingBottom: '1rem', borderBottom: '1px solid rgba(170,255,0,0.1)' }}>
-                                        <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#aaff00', boxShadow: '0 0 6px rgba(170,255,0,0.8)' }} />
-                                        <span className="section-label">Questions — {selectedCodebase.name}</span>
+                                    {/* Avatar */}
+                                    <div style={{
+                                        width: '46px', height: '46px', borderRadius: '12px', flexShrink: 0,
+                                        background: isSelected ? 'var(--accent)' : 'var(--dark)',
+                                        border: `2px solid ${isSelected ? 'var(--accent)' : 'var(--border)'}`,
+                                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                        transition: 'all 0.18s',
+                                    }}>
+                                        {cb.source === 'github' || cb.source === 'github-split'
+                                            ? <Github size={20} color={isSelected ? 'var(--bg)' : 'var(--accent)'} />
+                                            : <FileArchive size={20} color={isSelected ? 'var(--bg)' : 'var(--accent)'} />
+                                        }
                                     </div>
 
-                                    {questionsLoading ? (
-                                        <div style={{ display: 'flex', justifyContent: 'center', padding: '3rem' }}>
-                                            <div className="spinner" />
+                                    {/* Info */}
+                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', marginBottom: '0.25rem' }}>
+                                            <div style={{ fontWeight: 800, fontSize: '0.88rem', color: isSelected ? 'var(--accent)' : 'var(--white)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', transition: 'color 0.18s' }}>
+                                                {cb.name}
+                                            </div>
+                                            {cb.created_at && (
+                                                <div style={{ color: 'var(--gray)', fontSize: '0.62rem', fontFamily: 'Space Mono, monospace', flexShrink: 0, display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                                                    <Clock size={9} />
+                                                    {new Date(cb.created_at).toLocaleDateString()}
+                                                </div>
+                                            )}
                                         </div>
-                                    ) : questions.length === 0 ? (
-                                        <div style={{ textAlign: 'center', padding: '3rem 1rem' }}>
-                                            <MessageSquare size={36} style={{ color: '#2a2a2a', margin: '0 auto 1rem' }} />
-                                            <p style={{ color: '#444', fontSize: '0.85rem' }}>No questions asked yet for this codebase.</p>
+
+                                        {/* Last message preview */}
+                                        <div style={{ color: 'var(--gray)', fontSize: '0.75rem', lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: '0.4rem' }}>
+                                            {lastUserMsg ? `"${lastUserMsg.text}"` : 'No questions yet — click to open'}
                                         </div>
-                                    ) : (
-                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', maxHeight: '65vh', overflowY: 'auto', paddingRight: '2px' }}>
-                                            {questions.map((item, i) => (
-                                                <motion.div
-                                                    key={i}
-                                                    initial={{ opacity: 0, y: 10 }}
-                                                    animate={{ opacity: 1, y: 0 }}
-                                                    transition={{ delay: i * 0.05 }}
-                                                    whileHover={{ y: -4 }}
-                                                    className="glass-card"
-                                                    style={{ padding: '1.1rem', cursor: 'pointer' }}
-                                                    onClick={() => navigate(`/qa/${selectedCodebase._id}`)}
-                                                >
-                                                    {/* Icon box */}
-                                                    <div style={{
-                                                        width: '32px', height: '32px',
-                                                        background: 'rgba(170,255,0,0.1)',
-                                                        border: '2px solid rgba(170,255,0,0.3)',
-                                                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                                        color: '#aaff00',
-                                                        marginBottom: '0.75rem',
-                                                    }}>
-                                                        <MessageSquare size={14} />
-                                                    </div>
 
-                                                    {/* Question */}
-                                                    <div style={{
-                                                        fontWeight: 800, fontSize: '0.82rem', color: '#fff',
-                                                        marginBottom: '0.35rem', lineHeight: 1.5,
-                                                        overflow: 'hidden', display: '-webkit-box',
-                                                        WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
-                                                    }}>
-                                                        {item.question}
-                                                    </div>
-
-                                                    {/* Date */}
-                                                    <div style={{ color: '#555', fontSize: '0.68rem', fontFamily: 'Space Mono, monospace', marginBottom: item.tags?.length > 0 ? '0.5rem' : 0 }}>
-                                                        {item.created_at ? new Date(item.created_at).toLocaleString() : '—'}
-                                                    </div>
-
-                                                    {/* Tags */}
-                                                    {item.tags?.length > 0 && (
-                                                        <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
-                                                            {item.tags.slice(0, 3).map((tag, ti) => (
-                                                                <span key={ti} className="tag" style={{ fontSize: '0.6rem', padding: '0.1rem 0.4rem' }}>{tag}</span>
-                                                            ))}
-                                                        </div>
-                                                    )}
-                                                </motion.div>
-                                            ))}
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                            <SourceBadge source={cb.source} />
+                                            {cb.file_count && (
+                                                <span style={{ color: 'var(--border)', fontSize: '0.6rem', fontFamily: 'Space Mono, monospace' }}>
+                                                    {cb.file_count} files
+                                                </span>
+                                            )}
+                                            {msgCount > 0 && (
+                                                <span style={{ marginLeft: 'auto', background: 'var(--accent)', color: 'var(--bg)', borderRadius: '20px', fontSize: '0.6rem', fontWeight: 800, padding: '0.1rem 0.45rem', minWidth: '20px', textAlign: 'center' }}>
+                                                    {msgCount}
+                                                </span>
+                                            )}
                                         </div>
-                                    )}
+                                    </div>
+
+                                    <ChevronRight size={15} style={{ color: isSelected ? 'var(--accent)' : 'var(--border)', flexShrink: 0, transition: 'transform 0.18s, color 0.18s', transform: isSelected ? 'rotate(90deg)' : 'none' }} />
                                 </motion.div>
-                            )}
-                        </AnimatePresence>
-                    </div>
-                )}
+                            );
+                        })
+                    )}
+                </div>
+
+                {/* ── CHAT PANEL ── */}
+                <AnimatePresence>
+                    {selectedId && (
+                        <motion.div
+                            key={selectedId}
+                            initial={{ opacity: 0, x: 20 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            exit={{ opacity: 0, x: 20 }}
+                            className="history-chat-panel"
+                            style={{
+                                position: 'sticky', top: '1.5rem',
+                                height: 'calc(100vh - 200px)',
+                                display: 'flex', flexDirection: 'column',
+                                background: 'var(--card)',
+                                border: '1.5px solid var(--accent-border)',
+                                borderRadius: '16px',
+                                overflow: 'hidden',
+                            }}
+                        >
+                            {/* Panel header */}
+                            <div style={{
+                                padding: '1rem 1.25rem',
+                                borderBottom: '1px solid var(--accent-border)',
+                                display: 'flex', alignItems: 'center', gap: '0.75rem',
+                                background: 'var(--accent-soft)',
+                                flexShrink: 0,
+                            }}>
+                                <div style={{
+                                    width: '36px', height: '36px', borderRadius: '50%',
+                                    background: 'var(--dark)', border: '2px solid var(--accent)',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                    flexShrink: 0,
+                                }}>
+                                    <Bot size={17} color="var(--accent)" />
+                                </div>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                    <div style={{ fontWeight: 800, fontSize: '0.88rem', color: 'var(--white)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                        {selectedCb?.name}
+                                    </div>
+                                    <div style={{ color: 'var(--accent)', fontSize: '0.65rem', fontFamily: 'Space Mono, monospace' }}>
+                                        {(chatMap[selectedId]?.filter(m => m.role === 'user').length) || 0} questions
+                                    </div>
+                                </div>
+                                <button
+                                    className="btn-primary"
+                                    onClick={() => navigate(`/qa/${selectedId}`)}
+                                    style={{ padding: '0.4rem 0.85rem', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '0.35rem', borderRadius: '8px' }}
+                                >
+                                    Continue Chat <ArrowRight size={13} />
+                                </button>
+                            </div>
+
+                            {/* Messages */}
+                            <div style={{ flex: 1, overflowY: 'auto', padding: '1.1rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                                {chatLoading ? (
+                                    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
+                                        <div className="spinner" />
+                                    </div>
+                                ) : (chatMap[selectedId] || []).length === 0 ? (
+                                    <div style={{ textAlign: 'center', padding: '3rem 1rem', color: 'var(--gray)', fontSize: '0.85rem' }}>
+                                        <MessageSquare size={32} style={{ color: 'var(--border)', margin: '0 auto 0.75rem', display: 'block' }} />
+                                        No questions asked yet.
+                                    </div>
+                                ) : (
+                                    (chatMap[selectedId] || []).map((msg, i) => (
+                                        <ChatBubble key={i} msg={msg} isUser={msg.role === 'user'} />
+                                    ))
+                                )}
+                            </div>
+
+                            {/* Quick CTA at bottom */}
+                            <div style={{ flexShrink: 0, padding: '0.85rem 1.1rem', borderTop: '1px solid var(--accent-border)', background: 'var(--dark)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <div style={{ flex: 1, background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '8px', padding: '0.45rem 0.85rem', color: 'var(--border)', fontSize: '0.8rem', cursor: 'text' }}
+                                    onClick={() => navigate(`/qa/${selectedId}`)}>
+                                    Ask a follow-up question...
+                                </div>
+                                <button
+                                    onClick={() => navigate(`/qa/${selectedId}`)}
+                                    style={{
+                                        background: 'var(--accent)', border: 'none', borderRadius: '8px',
+                                        color: 'var(--bg)', cursor: 'pointer', padding: '0.5rem',
+                                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                        boxShadow: '0 4px 10px var(--accent-glow)',
+                                    }}
+                                >
+                                    <ArrowRight size={16} />
+                                </button>
+                            </div>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
             </div>
         </div>
     );
