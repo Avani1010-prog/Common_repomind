@@ -63,6 +63,11 @@ export const getAllCodebases = async () => {
     return response.data;
 };
 
+export const deleteCodebase = async (codebaseId) => {
+    const response = await api.delete(`/history/${codebaseId}`);
+    return response.data;
+};
+
 export const getHealth = async () => {
     const response = await api.get('/health');
     return response.data;

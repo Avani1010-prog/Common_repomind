@@ -4,9 +4,9 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     MessageSquare, Bot, User, Clock, Folder, Github,
     FileArchive, ChevronRight, Search, ArrowRight,
-    Hash, Layers, Plus
+    Hash, Layers, Plus, Trash2
 } from 'lucide-react';
-import { getAllCodebases, getHistory } from '../services/api';
+import { getAllCodebases, getHistory, deleteCodebase } from '../services/api';
 
 /* ─── Source tag ────────────────────────────────────────────────── */
 const SourceBadge = ({ source }) => {
@@ -99,6 +99,8 @@ const History = ({ showToast }) => {
     const [chatMap, setChatMap] = useState({}); // { codebaseId: [{role, text, tags, time}] }
     const [chatLoading, setChatLoading] = useState(false);
     const [search, setSearch] = useState('');
+    const [deletingId, setDeletingId] = useState(null);   // id being confirmed
+    const [deleteLoading, setDeleteLoading] = useState(false);
 
     useEffect(() => { fetchCodebases(); }, []);
 
@@ -135,7 +137,22 @@ const History = ({ showToast }) => {
             setChatLoading(false);
         }
     };
-
+    const handleDelete = async (e, id) => {
+        e.stopPropagation();
+        if (deletingId !== id) { setDeletingId(id); return; }
+        setDeleteLoading(true);
+        try {
+            await deleteCodebase(id);
+            setCodebases(prev => prev.filter(cb => cb._id !== id));
+            if (selectedId === id) setSelectedId(null);
+            showToast?.('Session deleted', 'success');
+        } catch {
+            showToast?.('Failed to delete session', 'error');
+        } finally {
+            setDeleteLoading(false);
+            setDeletingId(null);
+        }
+    };
     const filtered = codebases.filter(cb => cb.name?.toLowerCase().includes(search.toLowerCase()));
     const selectedCb = codebases.find(cb => cb._id === selectedId);
 
@@ -201,6 +218,7 @@ const History = ({ showToast }) => {
                             const msgs = chatMap[cb._id] || [];
                             const lastUserMsg = msgs.filter(m => m.role === 'user').slice(-1)[0];
                             const msgCount = msgs.filter(m => m.role === 'user').length;
+                            const isConfirming = deletingId === cb._id;
 
                             return (
                                 <motion.div
@@ -209,36 +227,37 @@ const History = ({ showToast }) => {
                                     animate={{ opacity: 1, x: 0 }}
                                     transition={{ delay: i * 0.05 }}
                                     whileHover={{ x: 3 }}
-                                    onClick={() => loadChat(cb)}
+                                    onClick={() => !isConfirming && loadChat(cb)}
                                     style={{
-                                        cursor: 'pointer',
+                                        cursor: isConfirming ? 'default' : 'pointer',
                                         padding: '1rem 1.1rem',
                                         borderRadius: '12px',
-                                        border: `1.5px solid ${isSelected ? 'var(--accent)' : 'var(--accent-border)'}`,
-                                        background: isSelected ? 'var(--accent-soft)' : 'var(--card)',
+                                        border: `1.5px solid ${isConfirming ? '#ff4444' : isSelected ? 'var(--accent)' : 'var(--accent-border)'}`,
+                                        background: isConfirming ? 'rgba(255,68,68,0.07)' : isSelected ? 'var(--accent-soft)' : 'var(--card)',
                                         display: 'flex', gap: '0.85rem', alignItems: 'center',
                                         transition: 'all 0.18s',
                                         boxShadow: isSelected ? '0 0 18px var(--accent-glow)' : 'none',
+                                        position: 'relative',
                                     }}
                                 >
                                     {/* Avatar */}
                                     <div style={{
                                         width: '46px', height: '46px', borderRadius: '12px', flexShrink: 0,
-                                        background: isSelected ? 'var(--accent)' : 'var(--dark)',
-                                        border: `2px solid ${isSelected ? 'var(--accent)' : 'var(--border)'}`,
+                                        background: isConfirming ? 'rgba(255,68,68,0.12)' : isSelected ? 'var(--accent)' : 'var(--dark)',
+                                        border: `2px solid ${isConfirming ? '#ff4444' : isSelected ? 'var(--accent)' : 'var(--border)'}`,
                                         display: 'flex', alignItems: 'center', justifyContent: 'center',
                                         transition: 'all 0.18s',
                                     }}>
                                         {cb.source === 'github' || cb.source === 'github-split'
-                                            ? <Github size={20} color={isSelected ? 'var(--bg)' : 'var(--accent)'} />
-                                            : <FileArchive size={20} color={isSelected ? 'var(--bg)' : 'var(--accent)'} />
+                                            ? <Github size={20} color={isConfirming ? '#ff4444' : isSelected ? 'var(--bg)' : 'var(--accent)'} />
+                                            : <FileArchive size={20} color={isConfirming ? '#ff4444' : isSelected ? 'var(--bg)' : 'var(--accent)'} />
                                         }
                                     </div>
 
                                     {/* Info */}
                                     <div style={{ flex: 1, minWidth: 0 }}>
                                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', marginBottom: '0.25rem' }}>
-                                            <div style={{ fontWeight: 800, fontSize: '0.88rem', color: isSelected ? 'var(--accent)' : 'var(--white)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', transition: 'color 0.18s' }}>
+                                            <div style={{ fontWeight: 800, fontSize: '0.88rem', color: isConfirming ? '#ff6666' : isSelected ? 'var(--accent)' : 'var(--white)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', transition: 'color 0.18s' }}>
                                                 {cb.name}
                                             </div>
                                             {cb.created_at && (
@@ -249,10 +268,34 @@ const History = ({ showToast }) => {
                                             )}
                                         </div>
 
-                                        {/* Last message preview */}
-                                        <div style={{ color: 'var(--gray)', fontSize: '0.75rem', lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: '0.4rem' }}>
-                                            {lastUserMsg ? `"${lastUserMsg.text}"` : 'No questions yet — click to open'}
-                                        </div>
+                                        {/* Inline confirm or last message preview */}
+                                        {isConfirming ? (
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem' }}>
+                                                <span style={{ color: '#ff6666', fontSize: '0.75rem', fontWeight: 600 }}>Delete this session?</span>
+                                                <button
+                                                    onClick={(e) => handleDelete(e, cb._id)}
+                                                    disabled={deleteLoading}
+                                                    style={{
+                                                        background: '#ff4444', border: 'none', borderRadius: '6px',
+                                                        color: '#fff', cursor: 'pointer', fontSize: '0.68rem',
+                                                        fontWeight: 700, padding: '0.15rem 0.55rem',
+                                                        opacity: deleteLoading ? 0.6 : 1,
+                                                    }}
+                                                >Yes, delete</button>
+                                                <button
+                                                    onClick={(e) => { e.stopPropagation(); setDeletingId(null); }}
+                                                    style={{
+                                                        background: 'transparent', border: '1px solid var(--border)',
+                                                        borderRadius: '6px', color: 'var(--gray)', cursor: 'pointer',
+                                                        fontSize: '0.68rem', fontWeight: 600, padding: '0.15rem 0.55rem',
+                                                    }}
+                                                >Cancel</button>
+                                            </div>
+                                        ) : (
+                                            <div style={{ color: 'var(--gray)', fontSize: '0.75rem', lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: '0.4rem' }}>
+                                                {lastUserMsg ? `"${lastUserMsg.text}"` : 'No questions yet — click to open'}
+                                            </div>
+                                        )}
 
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                             <SourceBadge source={cb.source} />
@@ -269,6 +312,29 @@ const History = ({ showToast }) => {
                                         </div>
                                     </div>
 
+                                    {/* Delete / chevron */}
+                                    {isConfirming ? null : (
+                                        <button
+                                            onClick={(e) => handleDelete(e, cb._id)}
+                                            title="Delete session"
+                                            style={{
+                                                background: 'transparent',
+                                                border: '1px solid rgba(255,68,68,0.25)',
+                                                borderRadius: '8px',
+                                                color: '#ff6666',
+                                                cursor: 'pointer',
+                                                padding: '0.35rem',
+                                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                flexShrink: 0,
+                                                opacity: 0.6,
+                                                transition: 'all 0.15s',
+                                            }}
+                                            onMouseEnter={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.background = 'rgba(255,68,68,0.12)'; e.currentTarget.style.borderColor = '#ff4444'; }}
+                                            onMouseLeave={e => { e.currentTarget.style.opacity = '0.6'; e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'rgba(255,68,68,0.25)'; }}
+                                        >
+                                            <Trash2 size={14} />
+                                        </button>
+                                    )}
                                     <ChevronRight size={15} style={{ color: isSelected ? 'var(--accent)' : 'var(--border)', flexShrink: 0, transition: 'transform 0.18s, color 0.18s', transform: isSelected ? 'rotate(90deg)' : 'none' }} />
                                 </motion.div>
                             );
